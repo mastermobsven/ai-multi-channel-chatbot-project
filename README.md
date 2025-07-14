@@ -1,4 +1,4 @@
-# AI Customer Support Chatbot Platform
+# AI Multi-Channel Chatbot Platform
 
 A modular, production-ready AI-powered customer support chatbot platform that handles multi-channel communication via WhatsApp, web chat, and email.
 
