@@ -1,4 +1,4 @@
-# Security Documentation for AI Customer Support Platform
+# Security Documentation for AI Multi-Channel Support Platform
 
 This document outlines the security measures, best practices, and considerations for the AI Customer Support Platform.
 
@@ -354,16 +354,3 @@ Key threats addressed by the security architecture:
 | Security monitoring | ✓ | | |
 | Incident response | ✓ | ✓ | |
 
-### Security Contacts
-
-- **Security Team**: security@example.com
-- **Emergency Contact**: +1-555-123-4567
-- **Bug Bounty Program**: https://example.com/security/bounty
-
-### References
-
-1. [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-2. [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
-3. [CIS Kubernetes Benchmarks](https://www.cisecurity.org/benchmark/kubernetes/)
-4. [GDPR Official Text](https://gdpr-info.eu/)
-5. [CCPA Official Text](https://oag.ca.gov/privacy/ccpa)
