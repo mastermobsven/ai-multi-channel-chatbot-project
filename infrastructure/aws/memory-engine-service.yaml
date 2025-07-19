@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AI Customer Support Platform - Memory Engine Service'
+
+Parameters:
+  Environment:
+    Description: Deployment environment
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    
+  ParentStackName:
+    Description: Name of the parent stack
+    Type: String
+    
+  DockerImageTag:
+    Description: Docker image tag to deploy
+    Type: String
+    Default: latest
+    
+  MemoryEnginePort:
+    Description: Port for Memory Engine service
+    Type: Number
+    Default: 8000
+    
+  ChromaDBPort:
+    Description: Port for ChromaDB service
+    Type: Number
+    Default: 8001
+    
+  RedisPort:
+    Description: Port for Redis service
+    Type: Number
+    Default: 6379
+    
+  TaskCpu:
+    Description: CPU units for the task (1024 = 1 vCPU)
+    Type: Number
+    Default: 1024
+    
+  TaskMemory:
+    Description: Memory for the task in MB
+    Type: Number
+    Default: 2048
+    
+  ChromaDBTaskCpu:
+    Description: CPU units for ChromaDB task
+    Type: Number
+    Default: 1024
+    
+  ChromaDBTaskMemory:
+    Description: Memory for ChromaDB task in MB
+    Type: Number
+    Default: 2048
+    
+  RedisTaskCpu:
+    Description: CPU units for Redis task
+    Type: Number
+    Default: 512
+    
+  RedisTaskMemory:
+    Description: Memory for Redis task in MB
+    Type: Number
+    Default: 1024
+    
+  DesiredCount:
+    Description: Desired count of tasks
+    Type: Number
+    Default: 1
+
+Resources:
+  # Task Definitions
+  MemoryEngineTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'memory-engine-${Environment}'
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      ContainerDefinitions:
+        - Name: memory-engine
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${MemoryEngineRepositoryUri}:${DockerImageTag}'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref MemoryEnginePort
+              HostPort: !Ref MemoryEnginePort
+              Protocol: tcp
+          Environment:
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisService.ServiceName
+            - Name: REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: CHROMA_HOST
+              Value: !GetAtt ChromaDBService.ServiceName
+            - Name: CHROMA_PORT
+              Value: !Ref ChromaDBPort
+            - Name: SESSION_CONTEXT_TTL
+              Value: '3600'
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:OPENAI_API_KEY::'
+            - Name: MEMORY_ENGINE_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:MEMORY_ENGINE_API_KEY::'
+            - Name: REDIS_PASSWORD
+              ValueFrom: !Sub '${AppSecretsArn}:REDIS_PASSWORD::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/ai-customer-support/memory-engine-${Environment}'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:8000/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+  
+  ChromaDBTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'chromadb-${Environment}'
+      Cpu: !Ref ChromaDBTaskCpu
+      Memory: !Ref ChromaDBTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      ContainerDefinitions:
+        - Name: chromadb
+          Image: ghcr.io/chroma-core/chroma:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ChromaDBPort
+              HostPort: !Ref ChromaDBPort
+              Protocol: tcp
+          Environment:
+            - Name: CHROMA_SERVER_HOST
+              Value: 0.0.0.0
+            - Name: CHROMA_SERVER_PORT
+              Value: !Ref ChromaDBPort
+            - Name: CHROMA_SERVER_CORS_ALLOW_ORIGINS
+              Value: '*'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/ai-customer-support/chromadb-${Environment}'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          MountPoints:
+            - SourceVolume: chromadb-data
+              ContainerPath: /chroma/chroma
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:8001/api/v1/heartbeat || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+      Volumes:
+        - Name: chromadb-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref ChromaDBFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              IAM: ENABLED
+  
+  RedisTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'redis-${Environment}'
+      Cpu: !Ref RedisTaskCpu
+      Memory: !Ref RedisTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      ContainerDefinitions:
+        - Name: redis
+          Image: redis:7-alpine
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref RedisPort
+              HostPort: !Ref RedisPort
+              Protocol: tcp
+          Command:
+            - redis-server
+            - --requirepass
+            - ${REDIS_PASSWORD}
+          Secrets:
+            - Name: REDIS_PASSWORD
+              ValueFrom: !Sub '${AppSecretsArn}:REDIS_PASSWORD::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/ai-customer-support/redis-${Environment}'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          MountPoints:
+            - SourceVolume: redis-data
+              ContainerPath: /data
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - redis-cli ping || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+      Volumes:
+        - Name: redis-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref RedisFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              IAM: ENABLED
+  
+  # EFS File Systems for Persistent Storage
+  ChromaDBFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub 'chromadb-${Environment}'
+  
+  RedisFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub 'redis-${Environment}'
+  
+  # EFS Mount Targets
+  ChromaDBMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ChromaDBFileSystem
+      SubnetId: {'Fn::Select': [0, {'Fn::Split': [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]}]}
+      SecurityGroups:
+        - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+  
+  ChromaDBMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ChromaDBFileSystem
+      SubnetId: {'Fn::Select': [1, {'Fn::Split': [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]}]}
+      SecurityGroups:
+        - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+  
+  RedisMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref RedisFileSystem
+      SubnetId: {'Fn::Select': [0, {'Fn::Split': [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]}]}
+      SecurityGroups:
+        - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+  
+  RedisMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref RedisFileSystem
+      SubnetId: {'Fn::Select': [1, {'Fn::Split': [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]}]}
+      SecurityGroups:
+        - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+  
+  # ECS Services
+  RedisService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - RedisMountTarget1
+      - RedisMountTarget2
+    Properties:
+      ServiceName: !Sub 'redis-${Environment}'
+      Cluster: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+      TaskDefinition: !Ref RedisTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]
+      ServiceRegistries:
+        - RegistryArn: !GetAtt RedisServiceDiscovery.Arn
+  
+  ChromaDBService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ChromaDBMountTarget1
+      - ChromaDBMountTarget2
+    Properties:
+      ServiceName: !Sub 'chromadb-${Environment}'
+      Cluster: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+      TaskDefinition: !Ref ChromaDBTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ChromaDBServiceDiscovery.Arn
+  
+  MemoryEngineService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - RedisService
+      - ChromaDBService
+    Properties:
+      ServiceName: !Sub 'memory-engine-${Environment}'
+      Cluster: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+      TaskDefinition: !Ref MemoryEngineTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]
+      LoadBalancers:
+        - ContainerName: memory-engine
+          ContainerPort: !Ref MemoryEnginePort
+          TargetGroupArn: {'Fn::ImportValue': !Sub '${ParentStackName}-MemoryEngineTargetGroup'}
+      ServiceRegistries:
+        - RegistryArn: !GetAtt MemoryEngineServiceDiscovery.Arn
+  
+  # Service Discovery
+  ServiceDiscoveryNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub 'ai-customer-support-${Environment}.local'
+      Vpc: {'Fn::ImportValue': !Sub '${ParentStackName}-VpcId'}
+  
+  MemoryEngineServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Sub 'memory-engine-${Environment}'
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+  
+  ChromaDBServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Sub 'chromadb-${Environment}'
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+  
+  RedisServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Sub 'redis-${Environment}'
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+  
+  # CloudWatch Log Groups
+  ChromaDBLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/ai-customer-support/chromadb-${Environment}'
+      RetentionInDays: 30
+  
+  RedisLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/ai-customer-support/redis-${Environment}'
+      RetentionInDays: 30
+
+Outputs:
+  MemoryEngineServiceName:
+    Description: Memory Engine Service Name
+    Value: !GetAtt MemoryEngineService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-MemoryEngineServiceName'
+  
+  ChromaDBServiceName:
+    Description: ChromaDB Service Name
+    Value: !GetAtt ChromaDBService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-ChromaDBServiceName'
+  
+  RedisServiceName:
+    Description: Redis Service Name
+    Value: !GetAtt RedisService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-RedisServiceName'
+  
+  ServiceDiscoveryNamespaceId:
+    Description: Service Discovery Namespace ID
+    Value: !Ref ServiceDiscoveryNamespace
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceDiscoveryNamespaceId'
+  
+  ChromaDBFileSystemId:
+    Description: ChromaDB EFS File System ID
+    Value: !Ref ChromaDBFileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-ChromaDBFileSystemId'
+  
+  RedisFileSystemId:
+    Description: Redis EFS File System ID
+    Value: !Ref RedisFileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-RedisFileSystemId'

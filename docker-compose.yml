@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # Chatbot Core Service
+  chatbot-core:
+    build:
+      context: ./services/chatbot-core
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - MEMORY_ENGINE_URL=http://memory-engine:8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=info
+    depends_on:
+      - redis
+      - memory-engine
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # Memory Engine Service
+  memory-engine:
+    build:
+      context: ./memory-engine
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - MEMORY_ENGINE_API_KEY=${MEMORY_ENGINE_API_KEY:-memory-engine-secret}
+      - SESSION_CONTEXT_TTL=86400
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - chromadb
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # Channel Integrations Service
+  channel-integrations:
+    build:
+      context: ./services/channel-integrations
+    ports:
+      - "3003:3003"
+      - "3003:3003/udp"  # For WebSocket connections
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+      - REDIS_URL=redis://redis:6379
+      - CHATBOT_CORE_URL=http://chatbot-core:3000/api
+      - WHATSAPP_API_VERSION=${WHATSAPP_API_VERSION}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
+      - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN}
+      - TWILIO_ENABLED=${TWILIO_ENABLED:-false}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_SECURE=${EMAIL_SECURE:-false}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - LOG_LEVEL=info
+    depends_on:
+      - redis
+      - chatbot-core
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # Web Widget (Development/Demo)
+  web-widget:
+    build:
+      context: ./web-widget
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./web-widget:/usr/src/app
+      - /usr/src/app/node_modules
+    command: npm start
+    networks:
+      - ai-support-network
+
+  # Redis for caching and pub/sub
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # MongoDB for storing chat logs and user data
+  mongodb:
+    image: mongo:6
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:-password}
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # PostgreSQL for structured data
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=${POSTGRES_DB:-ai_support}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+      
+  # ChromaDB for vector embeddings
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_PORT=8000
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=*
+      - PERSIST_DIRECTORY=/chroma/data
+    volumes:
+      - chroma-data:/chroma/data
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+  # Nginx for reverse proxy and SSL termination
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/www:/usr/share/nginx/html
+    depends_on:
+      - chatbot-core
+      - channel-integrations
+      - web-widget
+    restart: unless-stopped
+    networks:
+      - ai-support-network
+
+volumes:
+  redis-data:
+  mongo-data:
+  postgres-data:
+  memory-data:
+  chroma-data:
+
+networks:
+  ai-support-network:
+    driver: bridge

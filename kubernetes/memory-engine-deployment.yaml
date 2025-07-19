@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-engine
+  labels:
+    app: memory-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: memory-engine
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: memory-engine
+    spec:
+      containers:
+      - name: memory-engine
+        image: ${DOCKER_REGISTRY}/memory-engine:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-platform-secrets
+              key: openai-api-key
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: ai-platform-config
+              key: redis-host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: ai-platform-config
+              key: redis-port
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ai-platform-secrets
+              key: redis-password
+        - name: CHROMA_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: ai-platform-config
+              key: chroma-host
+        - name: CHROMA_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: ai-platform-config
+              key: chroma-port
+        - name: MEMORY_ENGINE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-platform-secrets
+              key: memory-engine-api-key
+        - name: SESSION_CONTEXT_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: ai-platform-config
+              key: session-context-ttl
+              optional: true
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-engine
+spec:
+  selector:
+    app: memory-engine
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP

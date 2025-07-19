@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Customer Support Widget - Development</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+    
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    
+    .config-panel {
+      background-color: #f9f9f9;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    
+    input, textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: inherit;
+    }
+    
+    button {
+      background-color: #0084ff;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    
+    button:hover {
+      background-color: #0074e0;
+    }
+    
+    .code-block {
+      background-color: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: monospace;
+      margin-top: 20px;
+    }
+    
+    .color-preview {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      margin-left: 10px;
+      vertical-align: middle;
+      border: 1px solid #ddd;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AI Customer Support Widget</h1>
+    <p>This is a development environment for the AI Customer Support Widget. You can configure the widget using the form below.</p>
+    
+    <div class="config-panel">
+      <h3>Widget Configuration</h3>
+      <div class="form-group">
+        <label for="serverUrl">WebSocket Server URL:</label>
+        <input type="text" id="serverUrl" value="wss://your-websocket-server.com" />
+      </div>
+      
+      <div class="form-group">
+        <label for="userId">User ID (optional):</label>
+        <input type="text" id="userId" placeholder="user123" />
+      </div>
+      
+      <div class="form-group">
+        <label for="sessionId">Session ID (optional):</label>
+        <input type="text" id="sessionId" placeholder="session456" />
+      </div>
+      
+      <div class="form-group">
+        <label for="primaryColor">Primary Color:
+          <span class="color-preview" id="primaryColorPreview" style="background-color: #0084ff;"></span>
+        </label>
+        <input type="text" id="primaryColor" value="#0084ff" />
+      </div>
+      
+      <div class="form-group">
+        <label for="secondaryColor">Secondary Color:
+          <span class="color-preview" id="secondaryColorPreview" style="background-color: #f0f0f0;"></span>
+        </label>
+        <input type="text" id="secondaryColor" value="#f0f0f0" />
+      </div>
+      
+      <div class="form-group">
+        <label for="title">Widget Title:</label>
+        <input type="text" id="title" value="Customer Support" />
+      </div>
+      
+      <div class="form-group">
+        <label for="welcomeMessage">Welcome Message:</label>
+        <textarea id="welcomeMessage" rows="3">Hello! How can I help you today?</textarea>
+      </div>
+      
+      <button id="applyConfig">Apply Configuration</button>
+    </div>
+    
+    <h3>Integration Code</h3>
+    <p>To integrate this widget into your website, add the following script tag:</p>
+    <div class="code-block" id="integrationCode">
+      &lt;script 
+        src="https://your-domain.com/widget.js" 
+        data-server-url="wss://your-websocket-server.com"
+        data-primary-color="#0084ff"
+        data-secondary-color="#f0f0f0"
+        data-title="Customer Support"
+        data-welcome-message="Hello! How can I help you today?"&gt;
+      &lt;/script&gt;
+    </div>
+  </div>
+  
+  <script>
+    // Update color previews when inputs change
+    document.getElementById('primaryColor').addEventListener('input', function() {
+      document.getElementById('primaryColorPreview').style.backgroundColor = this.value;
+    });
+    
+    document.getElementById('secondaryColor').addEventListener('input', function() {
+      document.getElementById('secondaryColorPreview').style.backgroundColor = this.value;
+    });
+    
+    // Apply configuration button
+    document.getElementById('applyConfig').addEventListener('click', function() {
+      // Remove existing widget if any
+      const existingWidget = document.getElementById('ai-customer-support-widget');
+      if (existingWidget) {
+        existingWidget.remove();
+      }
+      
+      // Get configuration values
+      const serverUrl = document.getElementById('serverUrl').value;
+      const userId = document.getElementById('userId').value;
+      const sessionId = document.getElementById('sessionId').value;
+      const primaryColor = document.getElementById('primaryColor').value;
+      const secondaryColor = document.getElementById('secondaryColor').value;
+      const title = document.getElementById('title').value;
+      const welcomeMessage = document.getElementById('welcomeMessage').value;
+      
+      // Create script tag with new configuration
+      const script = document.createElement('script');
+      script.src = '/widget.js';
+      script.setAttribute('data-server-url', serverUrl);
+      if (userId) script.setAttribute('data-user-id', userId);
+      if (sessionId) script.setAttribute('data-session-id', sessionId);
+      script.setAttribute('data-primary-color', primaryColor);
+      script.setAttribute('data-secondary-color', secondaryColor);
+      script.setAttribute('data-title', title);
+      script.setAttribute('data-welcome-message', welcomeMessage);
+      
+      // Update integration code display
+      let codeHtml = `&lt;script 
+        src="https://your-domain.com/widget.js" 
+        data-server-url="${serverUrl}"`;
+        
+      if (userId) codeHtml += `\n        data-user-id="${userId}"`;
+      if (sessionId) codeHtml += `\n        data-session-id="${sessionId}"`;
+      
+      codeHtml += `\n        data-primary-color="${primaryColor}"
+        data-secondary-color="${secondaryColor}"
+        data-title="${title}"
+        data-welcome-message="${welcomeMessage}"&gt;
+      &lt;/script&gt;`;
+      
+      document.getElementById('integrationCode').innerHTML = codeHtml;
+      
+      // Add script to page to initialize widget
+      document.body.appendChild(script);
+    });
+  </script>
+</body>
+</html>

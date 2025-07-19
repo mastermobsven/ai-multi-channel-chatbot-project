@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AI Customer Support Platform - Chatbot Core Service'
+
+Parameters:
+  Environment:
+    Description: Deployment environment
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    
+  ParentStackName:
+    Description: Name of the parent stack
+    Type: String
+    
+  MemoryEngineStackName:
+    Description: Name of the memory engine stack
+    Type: String
+    
+  DockerImageTag:
+    Description: Docker image tag to deploy
+    Type: String
+    Default: latest
+    
+  ChatbotCorePort:
+    Description: Port for Chatbot Core service
+    Type: Number
+    Default: 8080
+    
+  TaskCpu:
+    Description: CPU units for the task (1024 = 1 vCPU)
+    Type: Number
+    Default: 1024
+    
+  TaskMemory:
+    Description: Memory for the task in MB
+    Type: Number
+    Default: 2048
+    
+  DesiredCount:
+    Description: Desired count of tasks
+    Type: Number
+    Default: 2
+    
+  AutoScalingMinCapacity:
+    Description: Minimum capacity for auto scaling
+    Type: Number
+    Default: 2
+    
+  AutoScalingMaxCapacity:
+    Description: Maximum capacity for auto scaling
+    Type: Number
+    Default: 10
+    
+  CPUUtilizationThreshold:
+    Description: CPU utilization threshold for scaling
+    Type: Number
+    Default: 70
+
+Resources:
+  # Task Definition
+  ChatbotCoreTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'chatbot-core-${Environment}'
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      ContainerDefinitions:
+        - Name: chatbot-core
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ChatbotCoreRepositoryUri}:${DockerImageTag}'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ChatbotCorePort
+              HostPort: !Ref ChatbotCorePort
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: !Ref Environment
+            - Name: PORT
+              Value: !Ref ChatbotCorePort
+            - Name: MEMORY_ENGINE_URL
+              Value: !Sub 'http://memory-engine-${Environment}.ai-customer-support-${Environment}.local:8000'
+            - Name: LOG_LEVEL
+              Value: info
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:OPENAI_API_KEY::'
+            - Name: MEMORY_ENGINE_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:MEMORY_ENGINE_API_KEY::'
+            - Name: WHATSAPP_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:WHATSAPP_API_KEY::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/ai-customer-support/chatbot-core-${Environment}'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:8080/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+  
+  # ECS Service
+  ChatbotCoreService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'chatbot-core-${Environment}'
+      Cluster: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+      TaskDefinition: !Ref ChatbotCoreTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]
+      LoadBalancers:
+        - ContainerName: chatbot-core
+          ContainerPort: !Ref ChatbotCorePort
+          TargetGroupArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ChatbotCoreTargetGroup'}
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ChatbotCoreServiceDiscovery.Arn
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DeploymentController:
+        Type: ECS
+  
+  # Service Discovery
+  ChatbotCoreServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Sub 'chatbot-core-${Environment}'
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      NamespaceId: {'Fn::ImportValue': !Sub '${MemoryEngineStackName}-ServiceDiscoveryNamespaceId'}
+  
+  # Auto Scaling
+  ChatbotCoreAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref AutoScalingMaxCapacity
+      MinCapacity: !Ref AutoScalingMinCapacity
+      ResourceId: !Sub 'service/${ECSClusterName}/${ChatbotCoreService.Name}'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+  
+  ChatbotCoreAutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub 'chatbot-core-cpu-scaling-${Environment}'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ChatbotCoreAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CPUUtilizationThreshold
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+  
+  # CloudWatch Alarms
+  ChatbotCoreHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'chatbot-core-high-cpu-${Environment}'
+      AlarmDescription: 'Alarm if CPU utilization is too high'
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+        - Name: ServiceName
+          Value: !GetAtt ChatbotCoreService.Name
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ChatbotCoreHighCPUTopic
+  
+  ChatbotCoreHighCPUTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub 'ChatbotCoreHighCPU-${Environment}'
+      TopicName: !Sub 'chatbot-core-high-cpu-${Environment}'
+
+Outputs:
+  ChatbotCoreServiceName:
+    Description: Chatbot Core Service Name
+    Value: !GetAtt ChatbotCoreService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-ChatbotCoreServiceName'
+  
+  ChatbotCoreServiceArn:
+    Description: Chatbot Core Service ARN
+    Value: !Ref ChatbotCoreService
+    Export:
+      Name: !Sub '${AWS::StackName}-ChatbotCoreServiceArn'
+  
+  ChatbotCoreTaskDefinitionArn:
+    Description: Chatbot Core Task Definition ARN
+    Value: !Ref ChatbotCoreTaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-ChatbotCoreTaskDefinitionArn'
+  
+  ChatbotCoreAutoScalingTargetArn:
+    Description: Chatbot Core Auto Scaling Target ARN
+    Value: !Ref ChatbotCoreAutoScalingTarget
+    Export:
+      Name: !Sub '${AWS::StackName}-ChatbotCoreAutoScalingTargetArn'

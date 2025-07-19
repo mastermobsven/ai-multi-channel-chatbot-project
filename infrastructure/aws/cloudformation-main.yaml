@@ -1,0 +1,385 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AI Customer Support Platform - Main Stack'
+
+Parameters:
+  Environment:
+    Description: Deployment environment
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    
+  OpenAIApiKey:
+    Description: OpenAI API Key (secure string)
+    Type: String
+    NoEcho: true
+    
+  MemoryEngineApiKey:
+    Description: Memory Engine API Key (secure string)
+    Type: String
+    NoEcho: true
+    
+  RedisPassword:
+    Description: Redis password (secure string)
+    Type: String
+    NoEcho: true
+    
+  WhatsAppApiKey:
+    Description: WhatsApp API Key (secure string)
+    Type: String
+    NoEcho: true
+    Default: ''
+    
+  DockerImageTag:
+    Description: Docker image tag to deploy
+    Type: String
+    Default: latest
+    
+  VpcId:
+    Description: VPC ID where resources will be deployed
+    Type: AWS::EC2::VPC::Id
+    
+  PublicSubnets:
+    Description: Public subnets for load balancers
+    Type: List<AWS::EC2::Subnet::Id>
+    
+  PrivateSubnets:
+    Description: Private subnets for ECS tasks
+    Type: List<AWS::EC2::Subnet::Id>
+    
+  SSLCertificateArn:
+    Description: ARN of SSL certificate for HTTPS
+    Type: String
+    Default: ''
+
+Resources:
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'ai-customer-support-${Environment}'
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+          Base: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+  
+  # ECR Repositories
+  ChatbotCoreRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'ai-customer-support/chatbot-core-${Environment}'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  
+  MemoryEngineRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'ai-customer-support/memory-engine-${Environment}'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  
+  AdminDashboardRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'ai-customer-support/admin-dashboard-${Environment}'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+  
+  # CloudWatch Log Groups
+  ChatbotCoreLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/ai-customer-support/chatbot-core-${Environment}'
+      RetentionInDays: 30
+  
+  MemoryEngineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/ai-customer-support/memory-engine-${Environment}'
+      RetentionInDays: 30
+  
+  AdminDashboardLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/ai-customer-support/admin-dashboard-${Environment}'
+      RetentionInDays: 30
+  
+  # Security Groups
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS services
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+  
+  # IAM Roles
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+  
+  # Secrets Manager
+  AppSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'ai-customer-support/${Environment}/app-secrets'
+      Description: Secrets for AI Customer Support Platform
+      SecretString: !Sub |
+        {
+          "OPENAI_API_KEY": "${OpenAIApiKey}",
+          "MEMORY_ENGINE_API_KEY": "${MemoryEngineApiKey}",
+          "REDIS_PASSWORD": "${RedisPassword}",
+          "WHATSAPP_API_KEY": "${WhatsAppApiKey}"
+        }
+  
+  # Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'ai-customer-support-${Environment}'
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets: !Ref PublicSubnets
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+  
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            Host: '#{host}'
+            Path: '/#{path}'
+            Query: '#{query}'
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasSSLCertificate
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AdminDashboardTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref SSLCertificateArn
+  
+  # Target Groups
+  AdminDashboardTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /api/health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Port: 3000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+  
+  ChatbotCoreTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+  
+  MemoryEngineTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Port: 8000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+  
+  # Listener Rules
+  ChatbotApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasSSLCertificate
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ChatbotCoreTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /api/chat*
+      ListenerArn: !Ref HttpsListener
+      Priority: 10
+  
+  MemoryApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasSSLCertificate
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref MemoryEngineTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /api/memory*
+      ListenerArn: !Ref HttpsListener
+      Priority: 20
+
+Conditions:
+  HasSSLCertificate: !Not [!Equals [!Ref SSLCertificateArn, '']]
+
+Outputs:
+  ClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+  
+  ChatbotCoreRepositoryUri:
+    Description: Chatbot Core ECR Repository URI
+    Value: !GetAtt ChatbotCoreRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-ChatbotCoreRepositoryUri'
+  
+  MemoryEngineRepositoryUri:
+    Description: Memory Engine ECR Repository URI
+    Value: !GetAtt MemoryEngineRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-MemoryEngineRepositoryUri'
+  
+  AdminDashboardRepositoryUri:
+    Description: Admin Dashboard ECR Repository URI
+    Value: !GetAtt AdminDashboardRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminDashboardRepositoryUri'
+  
+  LoadBalancerDnsName:
+    Description: Load Balancer DNS Name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerDnsName'
+  
+  ServiceSecurityGroupId:
+    Description: Security Group ID for ECS Services
+    Value: !GetAtt ServiceSecurityGroup.GroupId
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceSecurityGroupId'
+  
+  ECSTaskExecutionRoleArn:
+    Description: ECS Task Execution Role ARN
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSTaskExecutionRoleArn'
+  
+  AppSecretsArn:
+    Description: App Secrets ARN
+    Value: !Ref AppSecrets
+    Export:
+      Name: !Sub '${AWS::StackName}-AppSecretsArn'

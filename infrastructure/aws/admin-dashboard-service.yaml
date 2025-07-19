@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AI Customer Support Platform - Admin Dashboard Service'
+
+Parameters:
+  Environment:
+    Description: Deployment environment
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    
+  ParentStackName:
+    Description: Name of the parent stack
+    Type: String
+    
+  ChatbotCoreStackName:
+    Description: Name of the chatbot core stack
+    Type: String
+    
+  MemoryEngineStackName:
+    Description: Name of the memory engine stack
+    Type: String
+    
+  DockerImageTag:
+    Description: Docker image tag to deploy
+    Type: String
+    Default: latest
+    
+  AdminDashboardPort:
+    Description: Port for Admin Dashboard service
+    Type: Number
+    Default: 3000
+    
+  TaskCpu:
+    Description: CPU units for the task (1024 = 1 vCPU)
+    Type: Number
+    Default: 1024
+    
+  TaskMemory:
+    Description: Memory for the task in MB
+    Type: Number
+    Default: 2048
+    
+  DesiredCount:
+    Description: Desired count of tasks
+    Type: Number
+    Default: 2
+
+Resources:
+  # Task Definition
+  AdminDashboardTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'admin-dashboard-${Environment}'
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      TaskRoleArn: {'Fn::ImportValue': !Sub '${ParentStackName}-ECSTaskExecutionRoleArn'}
+      ContainerDefinitions:
+        - Name: admin-dashboard
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AdminDashboardRepositoryUri}:${DockerImageTag}'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AdminDashboardPort
+              HostPort: !Ref AdminDashboardPort
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: !Ref Environment
+            - Name: PORT
+              Value: !Ref AdminDashboardPort
+            - Name: NEXT_PUBLIC_API_URL
+              Value: !Sub 'https://${LoadBalancerDnsName}/api'
+            - Name: CHATBOT_CORE_URL
+              Value: !Sub 'http://chatbot-core-${Environment}.ai-customer-support-${Environment}.local:8080'
+            - Name: MEMORY_ENGINE_URL
+              Value: !Sub 'http://memory-engine-${Environment}.ai-customer-support-${Environment}.local:8000'
+          Secrets:
+            - Name: MEMORY_ENGINE_API_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:MEMORY_ENGINE_API_KEY::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/ai-customer-support/admin-dashboard-${Environment}'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:3000/api/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+  
+  # ECS Service
+  AdminDashboardService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'admin-dashboard-${Environment}'
+      Cluster: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+      TaskDefinition: !Ref AdminDashboardTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - {'Fn::ImportValue': !Sub '${ParentStackName}-ServiceSecurityGroupId'}
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${ParentStackName}-PrivateSubnets'}]
+      LoadBalancers:
+        - ContainerName: admin-dashboard
+          ContainerPort: !Ref AdminDashboardPort
+          TargetGroupArn: {'Fn::ImportValue': !Sub '${ParentStackName}-AdminDashboardTargetGroup'}
+      ServiceRegistries:
+        - RegistryArn: !GetAtt AdminDashboardServiceDiscovery.Arn
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DeploymentController:
+        Type: ECS
+  
+  # Service Discovery
+  AdminDashboardServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: !Sub 'admin-dashboard-${Environment}'
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      NamespaceId: {'Fn::ImportValue': !Sub '${MemoryEngineStackName}-ServiceDiscoveryNamespaceId'}
+  
+  # CloudWatch Alarms
+  AdminDashboardHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'admin-dashboard-high-cpu-${Environment}'
+      AlarmDescription: 'Alarm if CPU utilization is too high'
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: {'Fn::ImportValue': !Sub '${ParentStackName}-ClusterName'}
+        - Name: ServiceName
+          Value: !GetAtt AdminDashboardService.Name
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AdminDashboardHighCPUTopic
+  
+  AdminDashboardHighCPUTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub 'AdminDashboardHighCPU-${Environment}'
+      TopicName: !Sub 'admin-dashboard-high-cpu-${Environment}'
+
+Outputs:
+  AdminDashboardServiceName:
+    Description: Admin Dashboard Service Name
+    Value: !GetAtt AdminDashboardService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminDashboardServiceName'
+  
+  AdminDashboardServiceArn:
+    Description: Admin Dashboard Service ARN
+    Value: !Ref AdminDashboardService
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminDashboardServiceArn'
+  
+  AdminDashboardTaskDefinitionArn:
+    Description: Admin Dashboard Task Definition ARN
+    Value: !Ref AdminDashboardTaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminDashboardTaskDefinitionArn'

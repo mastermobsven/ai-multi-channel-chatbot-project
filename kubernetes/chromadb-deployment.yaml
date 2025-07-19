@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chromadb
+  labels:
+    app: chromadb
+spec:
+  serviceName: chromadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chromadb
+  template:
+    metadata:
+      labels:
+        app: chromadb
+    spec:
+      containers:
+      - name: chromadb
+        image: ghcr.io/chroma-core/chroma:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+        env:
+        - name: CHROMA_SERVER_HOST
+          value: "0.0.0.0"
+        - name: CHROMA_SERVER_PORT
+          value: "8000"
+        - name: CHROMA_SERVER_CORS_ALLOW_ORIGINS
+          value: "*"
+        - name: CHROMA_SERVER_AUTH_CREDENTIALS_FILE
+          value: "/etc/chroma/auth.json"
+        - name: PERSIST_DIRECTORY
+          value: "/chroma/data"
+        volumeMounts:
+        - name: chroma-data
+          mountPath: /chroma/data
+        - name: chroma-config
+          mountPath: /etc/chroma
+        readinessProbe:
+          httpGet:
+            path: /api/v1/heartbeat
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/v1/heartbeat
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+      volumes:
+      - name: chroma-config
+        configMap:
+          name: chroma-config
+  volumeClaimTemplates:
+  - metadata:
+      name: chroma-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chromadb
+spec:
+  selector:
+    app: chromadb
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chroma-config
+data:
+  auth.json: |
+    {
+      "chroma_client_auth_provider": "token",
+      "chroma_client_auth_credentials": "${CHROMA_CLIENT_AUTH_TOKEN}"
+    }
