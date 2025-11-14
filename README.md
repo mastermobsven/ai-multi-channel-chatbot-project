@@ -37,7 +37,7 @@ A modular, production-ready AI-powered customer support chatbot platform that ha
 ## 🏗️ Project Structure
 
 ```
-ai-customer-support-platform/
+ai-multi-chat-platform/
 ├── services/
 │   ├── chatbot-core/           # Core chatbot service
 │   ├── memory-engine/          # Memory and context management
