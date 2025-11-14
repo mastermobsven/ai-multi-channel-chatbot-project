@@ -69,7 +69,6 @@ ai-customer-support-platform/
 ## 🚀 Development
 
 See individual service READMEs for specific development instructions.
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
