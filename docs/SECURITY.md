@@ -1,7 +1,7 @@
 # Security Documentation for AI Multi-Channel Support Platform
 
 
-This document outlines the security measures, best practices, and considerations for the AI Customer Support Platform.
+This document outlines the security measures, best practices, and considerations for the AI Multi-Chat Platform.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ This document outlines the security measures, best practices, and considerations
 
 ### Defense in Depth
 
-The AI Customer Support Platform implements a defense-in-depth approach with multiple security layers:
+The AI Multi-Chat Platform implements a defense-in-depth approach with multiple security layers:
 
 1. **Network Layer**: Firewalls, network segmentation, and TLS encryption
 2. **Application Layer**: Input validation, output encoding, and secure coding practices
