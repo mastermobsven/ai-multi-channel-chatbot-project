@@ -1,5 +1,8 @@
 # AI Multi-Channel Chatbot Platform
-assets/a09r93j4i4i203030f302o303232.png
+<p align="center">
+  <img alt="Midscene.js"  width="260" src="https://github.com/mastermobsven/ai-multi-channel-chatbot-project/assets/a09r93j4i4i203030f302o303232.png">
+</p>
+
 A modular, production-ready AI-powered customer support chatbot platform that handles multi-channel communication via WhatsApp, web chat, and email.
 
 ## 🧠 Core Features
